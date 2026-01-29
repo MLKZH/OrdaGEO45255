@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Кадастровая карта РК</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet Draw -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+
+  <!-- jsPDF + html2canvas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
+    #map { height: 100%; }
+    header {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+      background: rgba(255,255,255,0.95);
+      padding: 8px 12px; display: flex; justify-content: space-between;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    aside {
+      position: absolute; right: 16px; top: 70px; z-index: 1000;
+      width: 320px; background: white; padding: 16px;
+      border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      max-height: 90%;
+      overflow-y: auto;
+    }
+    button { width: 100%; padding: 8px; margin-top: 6px; cursor: pointer; border-radius: 6px; border:none; background:#007bff; color:white; }
+    button:hover { background:#0056b3; }
+    input, select { width: 100%; padding: 6px; margin-bottom: 6px; border-radius: 4px; border:1px solid #ccc; }
+    .login-box { margin-top: 12px; padding: 10px; border: 1px solid #ccc; border-radius: 6px; background:#f8f9fa; }
+    .feature-btn { margin-top:4px; background:#28a745; }
+    .feature-btn:hover { background:#1e7e34; }
+  </style>
+</head>
+<body>
+
+<header>
+  <b id="title">Кадастровая карта РК</b>
+  <select onchange="setLang(this.value)">
+    <option value="ru">RU</option>
+    <option value="kz">KZ</option>
+  </select>
+</header>
+
+<div id="map"></div>
+
+<aside>
+  <h3 id="searchLabel">Поиск участка</h3>
+  <input id="cadNum" placeholder="Кадастровый номер или коммерческая недвижимость" />
+  <button onclick="searchParcel()" id="findBtn">Найти</button>
+
+  <div class="login-box" id="loginBox">
+    <h4 id="loginLabel">Личный кабинет</h4>
+    <input id="email" placeholder="Email" />
+    <input id="password" type="password" placeholder="Пароль" />
+    <button onclick="login()" id="loginBtn">Войти</button>
+    <div id="userInfo"></div>
+    <button class="feature-btn" onclick="logout()" id="logoutBtn">Выйти</button>
+  </div>
+
+  <hr />
+
+  <button onclick="exportPDF()" id="pdfBtn">Экспорт PDF</button>
+  <button class="feature-btn" onclick="toggleLayers()" id="wmsBtn">Переключить слой</button>
+
+  <hr />
+
+  <h4 id="estimateLabel">Оценка участка</h4>
+  <button onclick="estimate()" id="estimateBtn">Показать цену с ЕГКН</button>
+  <div id="price"></div>
+
+  <hr />
+  <h4 id="toolsLabel">Инструменты карты</h4>
+  <button class="feature-btn" onclick="zoomToCity()" id="centerBtn">Центр на Талгар</button>
+  <button class="feature-btn" onclick="enableMeasure()" id="measureBtn">Измерить площадь</button>
+  <button class="feature-btn" onclick="clickCadastre()" id="cadClickBtn">Клик кадастр</button>
+</aside>
+
+<script>
+let drawnItems = new L.FeatureGroup();
+let lastPolygon = null;
+let cadastreClickEnabled = false;
+
+// ===== ЛОКАЛИЗАЦИЯ =====
+const dict = {
+  ru: {
+    title:'Кадастровая карта РК',
+    search:'Поиск участка', find:'Найти', pdf:'Экспорт PDF',
+    estimate:'Оценка участка', login:'Личный кабинет', enter:'Войти', logout:'Выйти',
+    tools:'Инструменты карты', center:'Центр на Талгар', measure:'Измерить площадь', cadClick:'Клик кадастр'
+  },
+  kz: {
+    title:'ҚР кадастрлық картасы',
+    search:'Жер телімін іздеу', find:'Іздеу', pdf:'PDF жүктеу',
+    estimate:'Жер бағалау', login:'Жеке кабинет', enter:'Кіру', logout:'Шығу',
+    tools:'Карта құралдары', center:'Талғар ортасы', measure:'Ауданды өлшеу', cadClick:'Кадастр бойынша басу'
+  }
+};
+
+function setLang(l){
+  document.getElementById('title').innerText = dict[l].title;
+  document.getElementById('searchLabel').innerText = dict[l].search;
+  document.getElementById('findBtn').innerText = dict[l].find;
+  document.getElementById('pdfBtn').innerText = dict[l].pdf;
+  document.getElementById('loginLabel').innerText = dict[l].login;
+  document.getElementById('loginBtn').innerText = dict[l].enter;
+  document.getElementById('logoutBtn').innerText = dict[l].logout;
+  document.getElementById('toolsLabel').innerText = dict[l].tools;
+  document.getElementById('centerBtn').innerText = dict[l].center;
+  document.getElementById('measureBtn').innerText = dict[l].measure;
+  document.getElementById('cadClickBtn').innerText = dict[l].cadClick;
+}
+
+// ===== КАРТА =====
+const map = L.map('map').setView([43.2445, 77.0719], 12); // Талгар
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+map.addLayer(drawnItems);
+
+// ===== Слои =====
+let layers = {
+  cadastre: L.tileLayer.wms('/api/wms/egkn', { layers:'cadastre:parcels', format:'image/png', transparent:true }),
+  commercial: L.tileLayer.wms('/api/wms/commercial', { layers:'commercial:objects', format:'image/png', transparent:true })
+};
+layers.cadastre.addTo(map);
+let currentLayer = 'cadastre';
+function toggleLayers(){
+  map.removeLayer(layers[currentLayer]);
+  currentLayer = currentLayer==='cadastre'?'commercial':'cadastre';
+  map.addLayer(layers[currentLayer]);
+}
+
+// ===== Draw =====
+const drawControl = new L.Control.Draw({
+  edit: { featureGroup: drawnItems },
+  draw: { polygon: true, polyline:false, rectangle:false, circle:false, marker:false, circlemarker:false }
+});
+map.addControl(drawControl);
+
+map.on(L.Draw.Event.CREATED, function (e) {
+  const layer = e.layer;
+  drawnItems.addLayer(layer);
+  if(layer instanceof L.Polygon){
+    const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+    alert('Площадь участка: ' + (area/10000).toFixed(2) + ' га');
+  }
+});
+
+// ===== Центр =====
+function zoomToCity(){ map.setView([43.2445, 77.0719],12); }
+
+// ===== Измерение =====
+function enableMeasure(){
+  alert('Нарисуйте полигон на карте для измерения площади');
+}
+
+// ===== Поиск участка =====
+async function searchParcel() {
+  const cadNum = document.getElementById('cadNum').value.trim();
+  if(!cadNum){ alert('Введите кадастровый номер или объект'); return; }
+
+  if(lastPolygon) map.removeLayer(lastPolygon);
+
+  try{
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/cadastre/search?number=${cadNum}`, {
+      headers: token ? { 'Authorization': 'Bearer '+token } : {}
+    });
+    if(!res.ok){ alert('Ошибка сервера: '+res.status); return; }
+    const data = await res.json();
+
+    let coords;
+    if(data.parcel?.geometry?.coordinates){
+      coords = data.parcel.geometry.coordinates[0];
+    } else if(data.features?.[0]?.geometry?.coordinates){
+      coords = data.features[0].geometry.coordinates[0];
+    } else { alert('Объект не найден'); return; }
+
+    coords = coords.map(c=>[c[1],c[0]]);
+    lastPolygon = L.polygon(coords, { color:'blue' }).addTo(map);
+    map.fitBounds(lastPolygon.getBounds());
+    L.popup().setLatLng(lastPolygon.getBounds().getCenter())
+      .setContent(`Объект найден: ${cadNum}`).openOn(map);
+
+  }catch(e){ console.error(e); alert('Ошибка поиска: '+e.message); }
+}
+
+// ===== Личный кабинет =====
+async function login(){
+  const email=document.getElementById('email').value;
+  const password=document.getElementById('password').value;
+  try{
+    const res = await fetch('/api/auth/login',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email,password})
+    });
+    const data = await res.json();
+    if(data.token){
+      localStorage.setItem('token',data.token);
+      document.getElementById('userInfo').innerText=`Вы вошли как ${email}`;
+    }else alert('Неверный логин');
+  }catch(e){ console.error(e); alert('Ошибка авторизации'); }
+}
+function logout(){ localStorage.removeItem('token'); document.getElementById('userInfo').innerText=''; alert('Вы вышли'); }
+
+// ===== PDF =====
+function exportPDF(){
+  html2canvas(document.getElementById('map')).then(canvas=>{
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('landscape', 'pt', [canvas.width, canvas.height]);
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+    pdf.save('parcel_map.pdf');
+  });
+}
+
+// ===== Оценка с ЕГКН =====
+async function estimate() {
+  const cadNum = document.getElementById('cadNum').value.trim();
+  if(!cadNum){ alert('Введите кадастровый номер'); return; }
+
+  try {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/cadastre/price?number=${cadNum}`, {
+      headers: token ? { 'Authorization': 'Bearer '+token } : {}
+    });
+    if(!res.ok){ alert('Ошибка сервера: '+res.status); return; }
+
+    const data = await res.json();
+    if(data && data.price){
+      document.getElementById('price').innerText = `Кадастровая стоимость: ${data.price.toLocaleString()} ₸`;
+    } else {
+      alert('Цена для данного участка не найдена');
+      document.getElementById('price').innerText = '';
+    }
+  } catch(e){
+    console.error(e);
+    alert('Ошибка получения цены: '+e.message);
+  }
+}
+
+// ===== Клик кадастр =====
+function clickCadastre(){
+  alert('Теперь кликните на участок на карте, чтобы увидеть кадастровый номер');
+  cadastreClickEnabled = true;
+}
+
+map.on('click', async function(e){
+  if(!cadastreClickEnabled) return;
+  cadastreClickEnabled = false;
+
+  const lat = e.latlng.lat;
+  const lng = e.latlng.lng;
+
+  try{
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/cadastre/point?lat=${lat}&lng=${lng}`, {
+      headers: token ? { 'Authorization': 'Bearer '+token } : {}
+    });
+    if(!res.ok){ alert('Ошибка сервера: '+res.status); return; }
+    const data = await res.json();
+
+    if(data.parcel && data.parcel.id){
+      L.popup().setLatLng([lat,lng])
+        .setContent(`Кадастровый номер: ${data.parcel.id}`)
+        .openOn(map);
+      // Автоматически показать цену после клика
+      document.getElementById('cadNum').value = data.parcel.id;
+      estimate();
+    } else alert('Участок не найден');
+
+  }catch(err){ console.error(err); alert('Ошибка получения данных'); }
+});
+</script>
+
+</body>
+</html>
